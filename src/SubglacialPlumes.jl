@@ -30,9 +30,9 @@ secs_per_year:: T = 365.25*24*60*60
 Si::T = 0.0       #salinity of ice
 Ti::T = 0.0     #tempatature of ice
 ρ0::T = 1000.0    #reference density of water
-initial_geometry::Array{T,2} #initial geoemetry of the configuration
-initial_Sa::Array{T,1} = 34.6 * ones(size(initial_geometry)[2],); @assert size(initial_Sa) == size(initial_geoemtry)[2]#default initial ambient is 34.6 everywhere
-initial_Ta::Array{T,1}  = 0.5  * ones(size(initial_geometry)[2],); @assert size(initial_Ta) == size(initial_geoemtry)[2]#default initial ambient is 0.5C everywhere
+initial_geometry::Array{T,2}  = vcat(Array(range(0, stop = 1000/0.01, length = 1000))',Array( -1000 .+ 0.01* range(0, stop = 1000/0.01, length = 1000))') #initial geoemetry of the configuration. Default is linear with GL depth -1000 and slope 0.01
+initial_Sa::Array{T,1} = 34.6 * ones(size(initial_geometry)[2],); @assert length(initial_Sa) == size(initial_geometry)[2]#default initial ambient is 34.6 everywhere
+initial_Ta::Array{T,1}  = 0.5  * ones(size(initial_geometry)[2],); @assert length(initial_Ta) == size(initial_geometry)[2]#default initial ambient is 0.5C everywhere
 end
 
 #grid for storing variables on the grid specified by the geometry
@@ -62,6 +62,8 @@ end
 
 #useful functions
 
+#define for testing
+f(x,y) = 2x + 3y
 #local freezing point of water
 temp_freezing(S,Z,params) = params.λ1 * S + params.λ2 + params.λ3 * Z
 
