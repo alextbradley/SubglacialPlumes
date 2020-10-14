@@ -2,3 +2,7 @@ name = "SubglacialPlumes"
 uuid = "151101d1-46c8-4581-9992-4d8bbb9e6159"
 authors = ["Alex Bradley <36222451+alextbradley@users.noreply.github.com>"]
 version = "0.1.0"
+
+[deps]
+DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
+Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
