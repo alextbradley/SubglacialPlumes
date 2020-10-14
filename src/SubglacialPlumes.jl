@@ -2,7 +2,7 @@ module SubglacialPlumes
 
 using Parameters, DifferentialEquations
 
-export Params
+export Params, solve_plume!
 
 #Abstract types
 abstract type AbstractModel{T <: Real, N<: Integer} end
@@ -30,7 +30,7 @@ secs_per_year:: T = 365.25*24*60*60
 Si::T = 0.0       #salinity of ice
 Ti::T = 0.0     #tempatature of ice
 ρ0::T = 1000.0    #reference density of water
-initial_geometry::Array{T,2}  = vcat(Array(range(0, stop = 1000/0.01, length = 1000))',Array( -1000 .+ 0.01* range(0, stop = 1000/0.01, length = 1000))') #initial geoemetry of the configuration. Default is linear with GL depth -1000 and slope 0.01
+initial_geometry::Array{T,2}  = linear_geometry(0.01, -1000) #default geometry is one with slope o.01 and grounding line depth -1000
 initial_Sa::Array{T,1} = 34.6 * ones(size(initial_geometry)[2],); @assert length(initial_Sa) == size(initial_geometry)[2]#default initial ambient is 34.6 everywhere
 initial_Ta::Array{T,1}  = 0.5  * ones(size(initial_geometry)[2],); @assert length(initial_Ta) == size(initial_geometry)[2]#default initial ambient is 0.5C everywhere
 end
@@ -40,6 +40,7 @@ end
 n::N #number of grid points
 zgl::R #depth of the grounding line
 geometry_length::R #arc length of the geometry
+v0::Array{R,1} = zeros(4,) #store initial conditions
 x::Array{R,1}; @assert size(x) == (n,) #x-coordinates of geometry
 z::Array{R,1}; @assert size(z) == (n,) #z-coordinates of geometry
 dz::Array{R,1}; @assert size(dz) == (n,) #slope of geometry (dZb/dx)
@@ -52,6 +53,7 @@ S::Array{R,1} = zeros(n,); @assert size(S) == (n,)
 T::Array{R,1} = zeros(n,); @assert size(T) == (n,)
 Δρ::Array{R,1} = zeros(n,); @assert size(Δρ) == (n,)
 ΔT::Array{R,1} = zeros(n,); @assert size(ΔT) == (n,)
+m::Array{R,1} = zeros(n,); @assert size(m) == (n,)
 end
 
 #structure to hold information
@@ -64,6 +66,7 @@ end
 
 #define for testing
 f(x,y) = 2x + 3y
+
 #local freezing point of water
 temp_freezing(S,Z,params) = params.λ1 * S + params.λ2 + params.λ3 * Z
 
@@ -83,14 +86,15 @@ density_contrast(S,Sa, T, Ta, params) = params.ρ0 * (params.βs * (Sa - S) - pa
 density_contrast_effective(Sa, Ta, Z,params) = density_contrast(params.Si, Sa,  temp_ief(Z,params), Ta, params)
 
 #melt rate factor
-m_naught(S,Z,params) = params.St / (temp_freezing(S,Z,params) - temp_ief(S,Z,params))
+m_naught(S,Z,params) = params.St / (temp_freezing(S,Z,params) - temp_ief(Z,params))
 
 #return the length of the geometry using linear interpolation
 get_geometry_length(geometry) = sum( sqrt.(diff(geometry[1,:]).^2 .+ diff(geometry[2,:]).^2))
 
+linear_geometry(α, zgl) = vcat(Array(range(0, stop = abs(zgl)/α, length = 1000))',Array( zgl .+ α* range(0, stop = abs(zgl)/α, length = 1000))') #initial geoemetry of the configuration. Default is linear with GL depth -1000 and slope 0.01
 
 #create plume from input parameters (parameters and geometry?)
-function start(params) where {T <: Real}
+function start(params) 
     #accepts input Z = Z_b(X) in form geometry = [Xb; Zb(Xb)].
     # Xb(1) specifies grounding line position, Zb(1) specifies grounding line position
     grid = Grid(
@@ -161,8 +165,13 @@ function get_local_var(s_local, s, var)
     return local_var
 end
 
-
-
+function convert_to_st(Δρ, ΔT, Z, Sa, Ta, params)
+    #convert a value of Δρ and ΔT to T, S
+    S = params.βs * Sa - Δρ./params.ρ0 - params.βt * (Ta - ΔT - params.λ2 - params.λ3 * Z) 
+    S = S/(params.βs - params.λ1 * params.βt)
+    T = ΔT + temp_freezing(S, Z, params)
+    return T, S
+end
 
 
 ################### ODE Functions #############################################
@@ -175,11 +184,11 @@ function get_rhs(du, v, plume, s)
     @unpack params, grid = plume
 
     #recover salinity and temperature
-    #T, S = get_temperature_and_salinity(Δ)
     #M0 = ..
     α, Z, Sa, Ta = get_local_variables(s, grid)
-
-    M0 = params.cw * params.St / params.L #update to include salinity and temperautr
+    M0 = params.cw * params.St / params.L #approximation using L/c >> Tf - Tfi
+    #T, S =SubglacialPlumes.convert_to_st(Δρ, ΔT, Z, Sa, Ta, params)
+    #M0 = params.St /(temp_freezing(S,Z,params) - temp_ief(Z, params))
 
     du[1] = params.E0*U*α + M0*U*ΔT
     du[2] = params.g*D*Δρ*α/params.ρ0 - params.Cd*U^2
@@ -214,46 +223,61 @@ function update_func(A, v, plume, s)
     A[4,4] = D*U
 end
 
-function get_ic(plume)
-    #wrapper function to return the initial condition depending on
-    #specification.Currently only no discharge initial condition implemented
-    return  no_discharge_ic(plume)
-end
 
-
-function no_discharge_ic(plume; xc = 100)
-    #returns the initial condition associated with no subglacial discharge
+""" 
+    update_ic!(plume::AbstractModel; xc = 100) 
+    update the initial conditions stored in grid. Overload this method to use initial conditions other than zero flux initial conditions
+"""
+function update_ic!(plume::AbstractModel; xc = 100) 
     @unpack params, grid = plume
     αlocal = grid.dz[1]
     E  = params.E0 * αlocal
     Ltilde = params.L + params.ci*(temp_freezing(params.Si,grid.zgl,params) - params.Ti)
     tau = grid.Ta[1] - temp_freezing(grid.Sa[1], grid.zgl, params)
 
-    v0 = zeros(4,)
+    v0 = zeros(4,) #explicitly define to ensure size compatibility
     v0[4] = E/(E + params.St) * tau;
     v0[3] = params.St * params.cw  * v0[4] * density_contrast_effective(grid.Sa[1], grid.Ta[1], grid.zgl,params) / E /Ltilde
     v0[2] = (E * v0[3] * αlocal * params.g / params.ρ0 /(2*E + (3/2*params.Cd)))^(1/2) * xc^(1/2)
     v0[1] = 2/3 * E * xc
-    return v0
+    grid.v0 .= v0
+    return plume
 end
 
-function solve_plume(plume; sspan = (0,plume.grid.geometry_length))
-    #get initial condition
-    v0 = get_ic(plume)
+function solve_plume!(plume; sspan = (0,plume.grid.geometry_length))
+    @unpack params, grid = plume
+
+    #endow plume with an initial condition (overload to change from no-discharge ic)
+    update_ic!(plume)
 
     #set up differential equation
     M = DiffEqArrayOperator(ones(4,4), update_func = update_func)
-    prob = ODEProblem(ODEFunction(get_rhs, mass_matrix = M), v0, sspan, plume)
+    prob = ODEProblem(ODEFunction(get_rhs, mass_matrix = M), grid.v0, sspan, plume)
 
     #set condition to trigger integration termination when velocity small
     condition(v,t, integrator) = v[2] - 1e-3
     affect!(integrator) = terminate!(integrator)
     cb = ContinuousCallback(condition, affect!)
 
-    sol = solve(prob, Rodas4(), callback = cb)
-    return sol
+    sol = solve(prob, Rodas4(), callback = cb, saveat = plume.grid.s)
+    grid.D .= sol[1,:]
+    grid.U .= sol[2,:]
+    grid.Δρ .= sol[3,:]
+    grid.ΔT .= sol[4,:]
+
+    #find corresponding salinity and temperature (no vectorization at params not vectorized)
+    for i = 1:1000
+        grid.T[i], grid.S[i] = SubglacialPlumes.convert_to_st(plume.grid.Δρ[i], plume.grid.ΔT[i], plume.grid.z[i], plume.grid.Sa[i], plume.grid.Ta[i], params)
+    end
+    
+    update_melt_rates!(plume)
+    return plume
 end
 
-
-
+function update_melt_rates!(plume)
+    @unpack params, grid = plume
+    M0 = params.cw * params.St / params.L #approximation using L/c >> Tf - Tfi
+    grid.m .= M0.* grid.U .* grid.ΔT
+    return plume
+end
 end # module

@@ -1,5 +1,8 @@
 language: julia
+
+julia:
+   - 1.5
+
 os:
   - linux
-julia:
-  - 1.5
+  - osx
