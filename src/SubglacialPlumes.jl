@@ -1,8 +1,8 @@
 module SubglacialPlumes
 
-using Parameters, DifferentialEquations
+using Parameters, DifferentialEquations, Plots
 
-export Params, solve_plume!
+export Params, solve!, parametrize!
 
 #Abstract types
 abstract type AbstractModel{T <: Real, N<: Integer} end
@@ -54,6 +54,7 @@ T::Array{R,1} = zeros(n,); @assert size(T) == (n,)
 Δρ::Array{R,1} = zeros(n,); @assert size(Δρ) == (n,)
 ΔT::Array{R,1} = zeros(n,); @assert size(ΔT) == (n,)
 m::Array{R,1} = zeros(n,); @assert size(m) == (n,)
+mparam::Array{R,1} = zeros(n,); @assert size(m) == (n,) #store a parametrization of the melt rate
 end
 
 #structure to hold information
@@ -91,7 +92,7 @@ m_naught(S,Z,params) = params.St / (temp_freezing(S,Z,params) - temp_ief(Z,param
 #return the length of the geometry using linear interpolation
 get_geometry_length(geometry) = sum( sqrt.(diff(geometry[1,:]).^2 .+ diff(geometry[2,:]).^2))
 
-linear_geometry(α, zgl) = vcat(Array(range(0, stop = abs(zgl)/α, length = 1000))',Array( zgl .+ α* range(0, stop = abs(zgl)/α, length = 1000))') #initial geoemetry of the configuration. Default is linear with GL depth -1000 and slope 0.01
+linear_geometry(α, zgl; n = 1000) = vcat(Array(range(0, stop = abs(zgl)/α, length = n))',Array( zgl .+ α* range(0, stop = abs(zgl)/α, length = n))') #initial geoemetry of the configuration. Default is linear with GL depth -1000 and slope 0.01
 
 #create plume from input parameters (parameters and geometry?)
 function start(params) 
@@ -132,7 +133,8 @@ function get_arclength(geometry)
 end
 
 
-function update_geometry!(plume)
+function update!(plume, geometry, Sa, Ta)
+    #update the plume geometry to the new specification (not sure how to achieve this!)
     return nothing
 
 end
@@ -244,7 +246,7 @@ function update_ic!(plume::AbstractModel; xc = 100)
     return plume
 end
 
-function solve_plume!(plume; sspan = (0,plume.grid.geometry_length))
+function solve!(plume; sspan = (0,plume.grid.geometry_length))
     @unpack params, grid = plume
 
     #endow plume with an initial condition (overload to change from no-discharge ic)
@@ -277,7 +279,33 @@ end
 function update_melt_rates!(plume)
     @unpack params, grid = plume
     M0 = params.cw * params.St / params.L #approximation using L/c >> Tf - Tfi
-    grid.m .= M0.* grid.U .* grid.ΔT
+    grid.m .= params.secs_per_year * M0.* grid.U .* grid.ΔT
+    return plume
+end
+
+"""
+    parametrize!(plume; method = "Lazeroms")
+    Update the mparam field to include a parametrization of the melt rate. Second argument specifies the method of paramtrization (default is Lazeroms w/out ad hoc geometric dependence)
+"""
+function parametrize!(plume; method = "Lazeroms")
+    if method == "Lazeroms"
+        parametrization_lazeroms!(plume)
+    else
+        error("Parametrization method must be one of following: Lazeroms, ")
+    end
+
+end
+
+function parametrization_lazeroms!(plume)
+    @unpack params, grid = plume
+    tau = grid.Ta[1] - temp_freezing(grid.Sa[1], grid.zgl, params)
+    l0  = tau/params.λ3  #z lengthscale associated with freezing point dependence. Uses slope at first grid point as angle scale
+    ΔTscale   = params.E0 *grid.dz[1] * tau/params.St; 
+    Uscale = sqrt(params.βs * grid.Sa[1] * params.g * l0 * tau * params.E0 * grid.dz[1]/(params.L/params.cw) / params.Cd);
+    snd = grid.s./(l0 / grid.dz[1]) #dimensionless version of arclength parameter s
+    #need to add control for snd > 1
+    M0 = params.cw * params.St / params.L #approximation using L/c >> Tf - Tf
+    @. grid.mparam = params.secs_per_year * M0 * Uscale *  ΔTscale * (3*(1 - snd)^(4/3) - 1).*(1 - (1 - snd)^(4/3))^(1/2) /2 /sqrt(2)
     return plume
 end
 end # module

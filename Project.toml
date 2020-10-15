@@ -5,6 +5,7 @@ version = "0.1.0"
 
 [deps]
 DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
+IJulia = "7073ff75-c697-5162-941a-fcdaad2a7d2a"
 Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
