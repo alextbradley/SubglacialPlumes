@@ -35,12 +35,10 @@ initial_Sa::Array{T,1} = 34.6 * ones(size(initial_geometry)[2],); @assert length
 initial_Ta::Array{T,1}  = 0.5  * ones(size(initial_geometry)[2],); @assert length(initial_Ta) == size(initial_geometry)[2]#default initial ambient is 0.5C everywhere
 end
 
-#grid for storing variables on the grid specified by the geometry
+#grid for storing variables on the grid (grid specified by geometry)
 @with_kw struct Grid{R <: Real, N <: Integer}
 n::N #number of grid points
-zgl::R #depth of the grounding line
 geometry_length::R #arc length of the geometry
-v0::Array{R,1} = zeros(4,) #store initial conditions
 x::Array{R,1}; @assert size(x) == (n,) #x-coordinates of geometry
 z::Array{R,1}; @assert size(z) == (n,) #z-coordinates of geometry
 dz::Array{R,1}; @assert size(dz) == (n,) #slope of geometry (dZb/dx)
@@ -57,10 +55,17 @@ m::Array{R,1} = zeros(n,); @assert size(m) == (n,)
 mparam::Array{R,1} = zeros(n,); @assert size(m) == (n,) #store a parametrization of the melt rate
 end
 
+#structure for storing useful quantities computed from the input parameters
+@with_kw struct Store{R <: Real}
+    zgl::R #depth of the grounding line
+    v0::Array{R,1} = zeros(4,) #store initial conditions
+end
+
 #structure to hold information
 @with_kw struct State{T <: Real, N<: Integer} <: AbstractModel{T,N}
 params::Params{T}
 grid::Grid{T,N}
+store::Store{T}
 end
 
 #useful functions
@@ -100,7 +105,6 @@ function start(params)
     # Xb(1) specifies grounding line position, Zb(1) specifies grounding line position
     grid = Grid(
         n = size(params.initial_geometry)[2],
-        zgl = params.initial_geometry[2,1],
         geometry_length = get_geometry_length(params.initial_geometry),
         x = params.initial_geometry[1,:],
         z = params.initial_geometry[2,:],
@@ -108,7 +112,11 @@ function start(params)
         dz = get_slope(params.initial_geometry),
         Sa = params.initial_Sa,
         Ta = params.initial_Ta)
-    plume=State(params, grid)
+
+    store = Store(
+        zgl = params.initial_geometry[2,1],
+    )
+    plume=State(params, grid, store)
     return plume
 end
 
@@ -231,18 +239,18 @@ end
     update the initial conditions stored in grid. Overload this method to use initial conditions other than zero flux initial conditions
 """
 function update_ic!(plume::AbstractModel; xc = 100) 
-    @unpack params, grid = plume
+    @unpack params, grid, store = plume
     αlocal = grid.dz[1]
     E  = params.E0 * αlocal
-    Ltilde = params.L + params.ci*(temp_freezing(params.Si,grid.zgl,params) - params.Ti)
-    tau = grid.Ta[1] - temp_freezing(grid.Sa[1], grid.zgl, params)
+    Ltilde = params.L + params.ci*(temp_freezing(params.Si,store.zgl,params) - params.Ti)
+    tau = grid.Ta[1] - temp_freezing(grid.Sa[1], store.zgl, params)
 
     v0 = zeros(4,) #explicitly define to ensure size compatibility
     v0[4] = E/(E + params.St) * tau;
-    v0[3] = params.St * params.cw  * v0[4] * density_contrast_effective(grid.Sa[1], grid.Ta[1], grid.zgl,params) / E /Ltilde
+    v0[3] = params.St * params.cw  * v0[4] * density_contrast_effective(grid.Sa[1], grid.Ta[1], store.zgl,params) / E /Ltilde
     v0[2] = (E * v0[3] * αlocal * params.g / params.ρ0 /(2*E + (3/2*params.Cd)))^(1/2) * xc^(1/2)
     v0[1] = 2/3 * E * xc
-    grid.v0 .= v0
+    store.v0 .= v0
     return plume
 end
 
@@ -254,7 +262,7 @@ function solve!(plume; sspan = (0,plume.grid.geometry_length))
 
     #set up differential equation
     M = DiffEqArrayOperator(ones(4,4), update_func = update_func)
-    prob = ODEProblem(ODEFunction(get_rhs, mass_matrix = M), grid.v0, sspan, plume)
+    prob = ODEProblem(ODEFunction(get_rhs, mass_matrix = M), store.v0, sspan, plume)
 
     #set condition to trigger integration termination when velocity small
     condition(v,t, integrator) = v[2] - 1e-3
@@ -298,7 +306,7 @@ end
 
 function parametrization_lazeroms!(plume)
     @unpack params, grid = plume
-    tau = grid.Ta[1] - temp_freezing(grid.Sa[1], grid.zgl, params)
+    tau = grid.Ta[1] - temp_freezing(grid.Sa[1], store.zgl, params)
     l0  = tau/params.λ3  #z lengthscale associated with freezing point dependence. Uses slope at first grid point as angle scale
     ΔTscale   = params.E0 *grid.dz[1] * tau/params.St; 
     Uscale = sqrt(params.βs * grid.Sa[1] * params.g * l0 * tau * params.E0 * grid.dz[1]/(params.L/params.cw) / params.Cd);
@@ -308,4 +316,6 @@ function parametrization_lazeroms!(plume)
     @. grid.mparam = params.secs_per_year * M0 * Uscale *  ΔTscale * (3*(1 - snd)^(4/3) - 1).*(1 - (1 - snd)^(4/3))^(1/2) /2 /sqrt(2)
     return plume
 end
+
+
 end # module
