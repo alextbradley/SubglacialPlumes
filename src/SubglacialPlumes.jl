@@ -59,6 +59,8 @@ end
 @with_kw struct Store{R <: Real}
     zgl::R #depth of the grounding line
     v0::Array{R,1} = zeros(4,) #store initial conditions
+    tau::R #thermal driving at the grounding line
+    l0::R #z -length scale associated with freezing point dependence
 end
 
 #structure to hold information
@@ -100,6 +102,8 @@ get_geometry_length(geometry) = sum( sqrt.(diff(geometry[1,:]).^2 .+ diff(geomet
 
 linear_geometry(α, zgl; n = 1000) = vcat(Array(range(0, stop = abs(zgl)/α, length = n))',Array( zgl .+ α* range(0, stop = abs(zgl)/α, length = n))') #initial geoemetry of the configuration. Default is linear with GL depth -1000 and slope 0.01
 
+get_tau(Ta0,Sa0, zgl, params) = Ta0 - temp_freezing(Sa0, zgl, params)
+
 #create plume from input parameters (parameters and geometry?)
 function start(params) 
     #accepts input Z = Z_b(X) in form geometry = [Xb; Zb(Xb)].
@@ -116,6 +120,8 @@ function start(params)
 
     store = Store(
         zgl = params.initial_geometry[2,1],
+        tau = get_tau(params.initial_Ta[1], params.initial_Sa[1], params.initial_geometry[2,1], params),
+        l0  = get_tau(params.initial_Ta[1], params.initial_Sa[1], params.initial_geometry[2,1], params)/params.λ3  #z lengthscale associated with freezing point dependence. Uses slope at first grid point as angle scale
     )
     plume=State(params, grid, store)
     return plume
@@ -242,10 +248,10 @@ function update_ic!(plume::AbstractModel; xc = 100)
     αlocal = grid.dz[1]
     E  = params.E0 * αlocal
     Ltilde = params.L + params.ci*(temp_freezing(params.Si,store.zgl,params) - params.Ti)
-    tau = grid.Ta[1] - temp_freezing(grid.Sa[1], store.zgl, params)
+    
 
     v0 = zeros(4,) #explicitly define to ensure size compatibility
-    v0[4] = E/(E + params.St) * tau;
+    v0[4] = E/(E + params.St) * store.tau;
     v0[3] = params.St * params.cw  * v0[4] * density_contrast_effective(grid.Sa[1], grid.Ta[1], store.zgl,params) / E /Ltilde
     v0[2] = (E * v0[3] * αlocal * params.g / params.ρ0 /(2*E + (3/2*params.Cd)))^(1/2) * xc^(1/2)
     v0[1] = 2/3 * E * xc
@@ -305,11 +311,9 @@ end
 
 function parametrization_lazeroms!(plume)
     @unpack params, grid, store = plume
-    tau = grid.Ta[1] - temp_freezing(grid.Sa[1], store.zgl, params)
-    l0  = tau/params.λ3  #z lengthscale associated with freezing point dependence. Uses slope at first grid point as angle scale
-    ΔTscale   = params.E0 *grid.dz[1] * tau/params.St; 
-    Uscale = sqrt(params.βs * grid.Sa[1] * params.g * l0 * tau * params.E0 * grid.dz[1]/(params.L/params.cw) / params.Cd);
-    snd = grid.s./(l0 / grid.dz[1]) #dimensionless version of arclength parameter s
+    ΔTscale   = params.E0 *grid.dz[1] * store.tau/params.St; 
+    Uscale = sqrt(params.βs * grid.Sa[1] * params.g * store.l0 * store.tau * params.E0 * grid.dz[1]/(params.L/params.cw) / params.Cd);
+    snd = grid.s./(store.l0 / grid.dz[1]) #dimensionless version of arclength parameter s
     #need to add control for snd > 1
     M0 = m_naught(params) #approximation using L/c >> Tf - Tf
     @. grid.mparam = params.secs_per_year * M0 * Uscale *  ΔTscale * (3*(1 - snd)^(4/3) - 1).*(1 - (1 - snd)^(4/3))^(1/2) /2 /sqrt(2)
