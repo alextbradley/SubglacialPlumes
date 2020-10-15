@@ -1,16 +1,19 @@
 module SubglacialPlumes
 
-using Parameters, DifferentialEquations, Plots
+using Parameters, DifferentialEquations
 
 export Params, solve!, parametrize!
 
 #Abstract types
 abstract type AbstractModel{T <: Real, N<: Integer} end
 
-#Struct to hold model parameters.
+"""
+Struct to hold model parameters.
 #Format: fieldname::Type = default_value.
 #T & N are type parameters, usually real numbers (e.g. Float64) and integers
 #(e.g. Int64) respectively. Variable names and default values from Jenkins 2011.
+Also store the specified ambient temperature and salinity and the initial geometry here.
+"""
 @with_kw struct Params{T <: Real}
 E0::T = 3.6e-2 #entrainment coefficient
 Cd::T = 2.5e-3 #drag coefficient
@@ -35,7 +38,9 @@ initial_Sa::Array{T,1} = 34.6 * ones(size(initial_geometry)[2],); @assert length
 initial_Ta::Array{T,1}  = 0.5  * ones(size(initial_geometry)[2],); @assert length(initial_Ta) == size(initial_geometry)[2]#default initial ambient is 0.5C everywhere
 end
 
-#grid for storing variables on the grid (grid specified by geometry)
+"""
+Structure for holding variables defined on the (user-specified) grid and grid properties
+"""
 @with_kw struct Grid{R <: Real, N <: Integer}
 n::N #number of grid points
 geometry_length::R #arc length of the geometry
@@ -55,7 +60,9 @@ m::Array{R,1} = zeros(n,); @assert size(m) == (n,)
 mparam::Array{R,1} = zeros(n,); @assert size(m) == (n,) #store a parametrization of the melt rate
 end
 
-#structure for storing useful quantities computed from the input parameters
+"""
+structure for storing useful quantities computed from the input parameters
+"""
 @with_kw struct Store{R <: Real}
     zgl::R #depth of the grounding line
     v0::Array{R,1} = zeros(4,) #store initial conditions
@@ -63,7 +70,9 @@ end
     l0::R #z -length scale associated with freezing point dependence
 end
 
-#structure to hold information
+""" 
+Structure to hold each of the above structures when plume is instantiated
+"""
 @with_kw struct State{T <: Real, N<: Integer} <: AbstractModel{T,N}
 params::Params{T}
 grid::Grid{T,N}
@@ -104,7 +113,7 @@ linear_geometry(α, zgl; n = 1000) = vcat(Array(range(0, stop = abs(zgl)/α, len
 
 get_tau(Ta0,Sa0, zgl, params) = Ta0 - temp_freezing(Sa0, zgl, params)
 
-#create plume from input parameters (parameters and geometry?)
+#create plume state from input parameters
 function start(params) 
     #accepts input Z = Z_b(X) in form geometry = [Xb; Zb(Xb)].
     # Xb(1) specifies grounding line position, Zb(1) specifies grounding line position
@@ -127,8 +136,8 @@ function start(params)
     return plume
 end
 
+#returns the slope Z_b'(X) at grid points X. Computed using centered finite differences, except for the end points which use one-sided differences
 function get_slope(geometry)
-    #returns the slope Z_b'(X) at grid points X
     dx = diff(geometry[1,:])[1] #we use a regular grid
     slope = zeros(1,size(geometry)[2])
     slope[2:end-1] = (-geometry[2,1:end-2] + geometry[2,3:end])/2 /dx
@@ -139,6 +148,9 @@ function get_slope(geometry)
     return slope[1,:]
 end
 
+"""
+Returns the arc length of the curve specified by the geometry 
+"""
 function get_arclength(geometry)
     #returns the arc length at grid points
     s = zeros(1,size(geometry)[2])
@@ -147,16 +159,10 @@ function get_arclength(geometry)
     return s[1,:]
 end
 
-
-function update!(plume, geometry, Sa, Ta)
-    #update the plume geometry to the new specification (not sure how to achieve this!)
-    return nothing
-
-end
-
+"""
+Return the slope of the base, Z co-ordinate, ambient salinity and temperature associated with arc length parameter s
+"""
 function get_local_variables(s, grid)
-    #return the slope of the base, Z co-ordinate, ambient salinity and
-    #temperature associated with arc length parameter s
     α = get_local_var(s, grid.s, grid.dz)
     Z = get_local_var(s, grid.s, grid.z)
     Sa = get_local_var(s, grid.s, grid.Sa)
@@ -164,9 +170,11 @@ function get_local_variables(s, grid)
     return α, Z, Sa, Ta
 end
 
+"""
+Returns the value of variable Var (defined on the same grid as S) at the local arclength position s
+"""
 function get_local_var(s_local, s, var)
-    #returns the value of variable Var (defined on the same grid as S) at the
-    #local arclength position s
+
     mxval, mxindx= findmax(-broadcast(abs, s .-s_local); dims = 1); #returns index of grid point with haf closest to zeros
     mxindx = mxindx[] #remove array packaging
     if mxindx > length(s) - 1 #we may encounter this case close to the front
@@ -182,6 +190,9 @@ function get_local_var(s_local, s, var)
     return local_var
 end
 
+"""
+Converts a value of Δρ, ΔT, Z, Sa(Z), Ta(Z) to the corresponding values of salinity S and temperature T
+"""
 function convert_to_st(Δρ, ΔT, Z, Sa, Ta, params)
     #convert a value of Δρ and ΔT to T, S
     S = params.βs * Sa - Δρ./params.ρ0 - params.βt * (Ta - ΔT - params.λ2 - params.λ3 * Z) 
@@ -192,6 +203,9 @@ end
 
 
 ################### ODE Functions #############################################
+"""
+Returns the right hand side of the plume equations (equations 14-17 in Jenkins 2011)
+"""
 function get_rhs(du, v, plume, s)
     #unpack parameters
     D = v[1]
@@ -213,6 +227,9 @@ function get_rhs(du, v, plume, s)
             params.λ3*α*D*U)
 end
 
+"""
+Specifies the mass matrix A, where plume equations are specified by A * dv/dt = f (v = D, U, Δρ, ΔT)
+"""
 function update_func(A, v, plume, s)
     #unpack parameters
     D = v[1]
@@ -240,8 +257,8 @@ end
 
 
 """ 
-    update_ic!(plume::AbstractModel; xc = 100) 
-    update the initial conditions stored in grid. Overload this method to use initial conditions other than zero flux initial conditions
+    Update the initial conditions stored in grid. 
+    Overload this method to use initial conditions other than zero flux initial conditions.
 """
 function update_ic!(plume::AbstractModel; xc = 100) 
     @unpack params, grid, store = plume
@@ -259,6 +276,9 @@ function update_ic!(plume::AbstractModel; xc = 100)
     return plume
 end
 
+"""
+    Solve the plume equations. Variables stored on grid are modified.
+"""
 function solve!(plume; sspan = (0,plume.grid.geometry_length))
     @unpack params, grid, store = plume
 
@@ -270,10 +290,11 @@ function solve!(plume; sspan = (0,plume.grid.geometry_length))
     prob = ODEProblem(ODEFunction(get_rhs, mass_matrix = M), store.v0, sspan, plume)
 
     #set condition to trigger integration termination when velocity small
-    condition(v,t, integrator) = v[2] - 1e-3
+    condition(v,t, integrator) = v[2] - eps()
     affect!(integrator) = terminate!(integrator)
     cb = ContinuousCallback(condition, affect!)
 
+    #note that the below does not account for the case where the plume terminates before edge of ice shelf
     sol = solve(prob, Rodas4(), callback = cb, saveat = plume.grid.s)
     grid.D .= sol[1,:]
     grid.U .= sol[2,:]
@@ -281,7 +302,7 @@ function solve!(plume; sspan = (0,plume.grid.geometry_length))
     grid.ΔT .= sol[4,:]
 
     #find corresponding salinity and temperature (no vectorization at params not vectorized)
-    for i = 1:1000
+    for i = 1:length(grid.n)
         grid.T[i], grid.S[i] = SubglacialPlumes.convert_to_st(plume.grid.Δρ[i], plume.grid.ΔT[i], plume.grid.z[i], plume.grid.Sa[i], plume.grid.Ta[i], params)
     end
     
@@ -289,6 +310,9 @@ function solve!(plume; sspan = (0,plume.grid.geometry_length))
     return plume
 end
 
+"""
+Updates the melt rates stored in the grid structure to correspond to the values of U, ΔT stored in same structure
+"""
 function update_melt_rates!(plume)
     @unpack params, grid = plume
     M0 = m_naught(params) #approximation using L/c >> Tf - Tfi
@@ -297,8 +321,8 @@ function update_melt_rates!(plume)
 end
 
 """
-    parametrize!(plume; method = "Lazeroms")
-    Update the mparam field to include a parametrization of the melt rate. Second argument specifies the method of paramtrization (default is Lazeroms w/out ad hoc geometric dependence)
+    Update the mparam field to include a parametrization of the melt rate. 
+    Second argument specifies the method of paramtrization (default is Lazeroms w/out ad hoc geometric dependence)
 """
 function parametrize!(plume; method = "Lazeroms")
     if method == "Lazeroms"
@@ -309,6 +333,9 @@ function parametrize!(plume; method = "Lazeroms")
 
 end
 
+"""
+    Modify the melt rate parametrization field to reflec the Lazeroms standard parametrization
+"""
 function parametrization_lazeroms!(plume)
     @unpack params, grid, store = plume
     ΔTscale   = params.E0 *grid.dz[1] * store.tau/params.St; 
