@@ -327,19 +327,37 @@ end
 function parametrize!(plume; method = "Lazeroms")
     if method == "Lazeroms"
         parametrization_lazeroms!(plume)
+    elseif method == "Lazeroms_AHG"
+        parametrization_lazeroms_AHG!(plume)
     else
-        error("Parametrization method must be one of following: Lazeroms, ")
+        error("Parametrization method must be one of following: Lazeroms, Lazeroms_AHG")
     end
 
 end
 
 """
-    Modify the melt rate parametrization field to reflec the Lazeroms standard parametrization
+    Modify the melt rate parametrization field to the standard Lazeroms parametrization
 """
 function parametrization_lazeroms!(plume)
     @unpack params, grid, store = plume
     ΔTscale   = params.E0 *grid.dz[1] * store.tau/params.St; 
     Uscale = sqrt(params.βs * grid.Sa[1] * params.g * store.l0 * store.tau * params.E0 * grid.dz[1]/(params.L/params.cw) / params.Cd);
+    snd = grid.s./(store.l0 / grid.dz[1]) #dimensionless version of arclength parameter s
+    #need to add control for snd > 1
+    M0 = m_naught(params) #approximation using L/c >> Tf - Tf
+    @. grid.mparam = params.secs_per_year * M0 * Uscale *  ΔTscale * (3*(1 - snd)^(4/3) - 1).*(1 - (1 - snd)^(4/3))^(1/2) /2 /sqrt(2)
+    return plume
+end
+
+"""
+    Modify the melt rate parametrization field to the Lazeroms ad-hoc geometry parametrization
+"""
+function parametrization_lazeroms_AHG!(plume)
+    @unpack params, grid, store = plume
+    ΔTscale = zeros(grid.n,)
+    Uscale  = zeros(grid.n,)
+    @. ΔTscale = params.E0 *grid.dz * store.tau/params.St; #vector: different angle in scale at each grid point
+    @. Uscale = sqrt(params.βs * grid.Sa[1] * params.g * store.l0 * store.tau * params.E0 * grid.dz/(params.L/params.cw) / params.Cd);
     snd = grid.s./(store.l0 / grid.dz[1]) #dimensionless version of arclength parameter s
     #need to add control for snd > 1
     M0 = m_naught(params) #approximation using L/c >> Tf - Tf
