@@ -255,7 +255,7 @@ function update_ic!(plume::AbstractModel; xc = 100)
 end
 
 function solve!(plume; sspan = (0,plume.grid.geometry_length))
-    @unpack params, grid = plume
+    @unpack params, grid, store = plume
 
     #endow plume with an initial condition (overload to change from no-discharge ic)
     update_ic!(plume)
@@ -305,7 +305,7 @@ function parametrize!(plume; method = "Lazeroms")
 end
 
 function parametrization_lazeroms!(plume)
-    @unpack params, grid = plume
+    @unpack params, grid, store = plume
     tau = grid.Ta[1] - temp_freezing(grid.Sa[1], store.zgl, params)
     l0  = tau/params.λ3  #z lengthscale associated with freezing point dependence. Uses slope at first grid point as angle scale
     ΔTscale   = params.E0 *grid.dz[1] * tau/params.St; 
