@@ -93,6 +93,7 @@ density_contrast_effective(Sa, Ta, Z,params) = density_contrast(params.Si, Sa,  
 
 #melt rate factor
 m_naught(S,Z,params) = params.St / (temp_freezing(S,Z,params) - temp_ief(Z,params))
+m_naught(params) =  params.cw * params.St / params.L #approximation using L/c >> Tf - Tfi
 
 #return the length of the geometry using linear interpolation
 get_geometry_length(geometry) = sum( sqrt.(diff(geometry[1,:]).^2 .+ diff(geometry[2,:]).^2))
@@ -196,9 +197,7 @@ function get_rhs(du, v, plume, s)
     #recover salinity and temperature
     #M0 = ..
     α, Z, Sa, Ta = get_local_variables(s, grid)
-    M0 = params.cw * params.St / params.L #approximation using L/c >> Tf - Tfi
-    #T, S =SubglacialPlumes.convert_to_st(Δρ, ΔT, Z, Sa, Ta, params)
-    #M0 = params.St /(temp_freezing(S,Z,params) - temp_ief(Z, params))
+    M0 = m_naught(params) #approximation using L/c >> Tf - Tfi
 
     du[1] = params.E0*U*α + M0*U*ΔT
     du[2] = params.g*D*Δρ*α/params.ρ0 - params.Cd*U^2
@@ -286,7 +285,7 @@ end
 
 function update_melt_rates!(plume)
     @unpack params, grid = plume
-    M0 = params.cw * params.St / params.L #approximation using L/c >> Tf - Tfi
+    M0 = m_naught(params) #approximation using L/c >> Tf - Tfi
     grid.m .= params.secs_per_year * M0.* grid.U .* grid.ΔT
     return plume
 end
@@ -312,7 +311,7 @@ function parametrization_lazeroms!(plume)
     Uscale = sqrt(params.βs * grid.Sa[1] * params.g * l0 * tau * params.E0 * grid.dz[1]/(params.L/params.cw) / params.Cd);
     snd = grid.s./(l0 / grid.dz[1]) #dimensionless version of arclength parameter s
     #need to add control for snd > 1
-    M0 = params.cw * params.St / params.L #approximation using L/c >> Tf - Tf
+    M0 = m_naught(params) #approximation using L/c >> Tf - Tf
     @. grid.mparam = params.secs_per_year * M0 * Uscale *  ΔTscale * (3*(1 - snd)^(4/3) - 1).*(1 - (1 - snd)^(4/3))^(1/2) /2 /sqrt(2)
     return plume
 end
