@@ -318,10 +318,11 @@ function solve!(plume; sspan = (0,plume.grid.geometry_length))
 
     #note that the below does not account for the case where the plume terminates before edge of ice shelf
     sol = solve(prob, Rodas4(), callback = cb, saveat = plume.grid.s)
-    grid.D .= sol[1,:]
-    grid.U .= sol[2,:]
-    grid.Δρ .= sol[3,:]
-    grid.ΔT .= sol[4,:]
+    nout = length(sol[1,:]) #number of cells solution fills
+    grid.D[1:nout] .= sol[1,:]
+    grid.U[1:nout] .= sol[2,:]
+    grid.Δρ[1:nout] .= sol[3,:]
+    grid.ΔT[1:nout] .= sol[4,:]
 
     #find corresponding salinity and temperature (no vectorization at params not vectorized)
     #for i = 1:length(grid.n)
@@ -365,6 +366,7 @@ function parametrization_lazeroms!(plume)
     ΔTscale   = params.E0 *grid.dz[1] * store.tau/params.St; 
     Uscale = sqrt(params.βs * grid.Sa[1] * params.g * store.l0 * store.tau * params.E0 * grid.dz[1]/(params.L/params.cw) / params.Cd);
     snd = grid.s./(store.l0 / grid.dz[1]) #dimensionless version of arclength parameter s
+    
     #need to add control for snd > 1
     M0 = m_naught(params) #approximation using L/c >> Tf - Tf
     @. grid.mparam = params.secs_per_year * M0 * Uscale *  ΔTscale * (3*(1 - snd)^(4/3) - 1).*(1 - (1 - snd)^(4/3))^(1/2) /2 /sqrt(2)
