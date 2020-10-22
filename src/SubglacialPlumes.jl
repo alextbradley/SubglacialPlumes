@@ -34,8 +34,10 @@ Si::T = 0.0       #salinity of ice
 Ti::T = 0.0     #tempatature of ice
 ρ0::T = 1000.0    #reference density of water
 geometry::Array{T,2}  = linear_geometry(0.01, -1000) #default geometry is one with slope o.01 and grounding line depth -1000
-initial_Sa::Array{T,1} = 34.6 * ones(size(geometry)[2],); @assert length(initial_Sa) == size(geometry)[2]#default initial ambient is 34.6 everywhere
-initial_Ta::Array{T,1}  = 0.5  * ones(size(geometry)[2],); @assert length(initial_Ta) == size(geometry)[2]#default initial ambient is 0.5C everywhere
+ambient_grid::Array{T,1} = Array(range(geometry[2,1], stop = 0, length = 100)); @assert ~any(diff(diff(ambient_grid)) .> 1e-5) #default ambient grid is linearly space between grounding line depth and surface
+#assert regular grid in the ambient salinity
+Sa::Array{T,1} = 34.6 * ones(size(ambient_grid)); @assert size(Sa) == size(ambient_grid)#default initial ambient is 34.6 everywhere
+Ta::Array{T,1}  = 0.5  *ones(size(ambient_grid)); @assert size(Ta) == size(ambient_grid)#default initial ambient is 0.5C everywhere
 end
 
 """
@@ -48,9 +50,6 @@ x::Array{R,1}; @assert size(x) == (n,) #x-coordinates of geometry
 z::Array{R,1}; @assert size(z) == (n,) #z-coordinates of geometry
 dz::Array{R,1}; @assert size(dz) == (n,) #slope of geometry (dZb/dx)
 s::Array{R,1}; @assert size(s) == (n,) #arc length parameter at grid points
-Ta::Array{R,1}; @assert size(Ta) == (n,)
-Sa::Array{R,1}; @assert size(Sa) == (n,)
-dρa_dz::Array{R,1}; @assert size(dρa_dz) == (n,)
 U::Array{R,1} = zeros(n,); @assert size(U) == (n,)
 D::Array{R,1} = zeros(n,); @assert size(D) == (n,)
 S::Array{R,1} = zeros(n,); @assert size(S) == (n,)
@@ -69,6 +68,7 @@ structure for storing useful quantities computed from the input parameters
     v0::Array{R,1} = zeros(4,) #store initial conditions
     tau::R #thermal driving at the grounding line
     l0::R #z -length scale associated with freezing point dependence
+    dρa_dz::Array{R,1}; #ambient density gradient, defined on ambient grid
 end
 
 """ 
@@ -124,27 +124,27 @@ function start(params)
         x = params.geometry[1,:],
         z = params.geometry[2,:],
         s = get_arclength(params.geometry),
-        dz = get_slope(params.geometry),
-        dρa_dz = get_ambient_density_gradient(params.initial_Sa, params.initial_Ta, params),
-        Sa = params.initial_Sa,
-        Ta = params.initial_Ta)
+        dz = get_slope(params.geometry))
 
     store = Store(
         zgl = params.geometry[2,1],
-        tau = get_tau(params.initial_Ta[1], params.initial_Sa[1], params.geometry[2,1], params),
-        l0  = get_tau(params.initial_Ta[1], params.initial_Sa[1], params.geometry[2,1], params)/params.λ3  #z lengthscale associated with freezing point dependence. Uses slope at first grid point as angle scale
+        tau = get_tau(params.Ta[1], params.Sa[1], params.geometry[2,1], params),
+        l0  = get_tau(params.Ta[1], params.Sa[1], params.geometry[2,1], params)/params.λ3,  #z lengthscale associated with freezing point dependence. Uses slope at first grid point as angle scale
+        dρa_dz = get_ambient_density_gradient(params.Sa, params.Ta, params)
     )
     plume=State(params, grid, store)
     return plume
 end
 
+
+
+
 """
 Returns the gradient in ambient density at grid points. Computed using centered finite differences, except for the endpoint, which use one sided FD.
 """
 function get_ambient_density_gradient(Sa, Ta, params)
-    println("Important! You can assumed constant grid in z here (computing ambient density gradient), but this does not hold in general! Need to adapt for non-constant grid spacing or specify input grid of Sa, Ta")
     #compute the associated ambient density using linear equation of state
-    dz = diff(params.geometry[2,:])[1] #we use a regular grid
+    dz = diff(params.ambient_grid)[1] #we use a regular grid
     ρa = zeros(size(Sa))
     dρa_dz = zeros(size(Sa))
     @. ρa = params.ρ0 * (params.βs * Sa - params.βt * Ta)
@@ -179,20 +179,9 @@ function get_arclength(geometry)
     return s[1,:]
 end
 
-"""
-Return the slope of the base, Z co-ordinate, ambient salinity and temperature associated with arc length parameter s
-"""
-function get_local_variables(s, grid)
-    α = get_local_var(s, grid.s, grid.dz)
-    Z = get_local_var(s, grid.s, grid.z)
-    Sa = get_local_var(s, grid.s, grid.Sa)
-    Ta = get_local_var(s, grid.s, grid.Ta)
-    dρa_dz = get_local_var(s, grid.s, grid.dρa_dz)
-    return α, Z, Sa, Ta, dρa_dz
-end
 
 """
-Returns the value of variable Var (defined on the same grid as S) at the local arclength position s
+Returns the value of variable Var (defined on the same grid as S) at the local position s
 """
 function get_local_var(s_local, s, var)
 
@@ -201,6 +190,10 @@ function get_local_var(s_local, s, var)
     if mxindx > length(s) - 1 #we may encounter this case close to the front
         local_var = var[end]
         return local_var
+    end
+
+    if (mxindx == 1) && s_local < s[mxindx] #if local point is smaller than all grid points in s
+        local_var = var[1]
     end
 
     if s[mxindx] > s_local #s_local is smaller than nearest grid point, so s_local ∈ (s[mxindx -1], s[mxindx])
@@ -233,11 +226,15 @@ function get_rhs(du, v, plume, s)
     U = v[2]
     Δρ = v[3]
     ΔT = v[4]
-    @unpack params, grid = plume
+    @unpack params, grid, store = plume
 
     #recover salinity and temperature
     #M0 = .. 
-    α, Z, Sa, Ta, dρa_dz = get_local_variables(s, grid)
+    α = get_local_var(s, grid.s, grid.dz)
+    Z = get_local_var(s, grid.s, grid.z)
+    Sa = get_local_var(Z, params.ambient_grid, params.Sa)
+    Ta = get_local_var(Z, params.ambient_grid, params.Ta)
+    dρa_dz = get_local_var(Z, params.ambient_grid, store.dρa_dz)
     M0 = m_naught(params) #approximation using L/c >> Tf - Tfi
 
     du[1] = params.E0*U*α + M0*U*ΔT
@@ -288,10 +285,13 @@ function update_ic!(plume::AbstractModel; xc = 100)
     E  = params.E0 * αlocal
     Ltilde = params.L + params.ci*(temp_freezing(params.Si,store.zgl,params) - params.Ti)
     
-
+    #get the ambient temperature and salnity at the grounding line
+    Sa = get_local_var(store.zgl, params.ambient_grid, params.Sa)
+    Ta = get_local_var(store.zgl, params.ambient_grid, params.Ta)
+    
     v0 = zeros(4,) #explicitly define to ensure size compatibility
     v0[4] = E/(E + params.St) * store.tau;
-    v0[3] = params.St * params.cw  * v0[4] * density_contrast_effective(grid.Sa[1], grid.Ta[1], store.zgl,params) / E /Ltilde
+    v0[3] = params.St * params.cw  * v0[4] * density_contrast_effective(Sa, Ta, store.zgl,params) / E /Ltilde
     v0[2] = (E * v0[3] * αlocal * params.g / params.ρ0 /(2*E + (3/2*params.Cd)))^(1/2) * xc^(1/2)
     v0[1] = 2/3 * E * xc
     store.v0 .= v0
@@ -324,9 +324,9 @@ function solve!(plume; sspan = (0,plume.grid.geometry_length))
     grid.ΔT .= sol[4,:]
 
     #find corresponding salinity and temperature (no vectorization at params not vectorized)
-    for i = 1:length(grid.n)
-        grid.T[i], grid.S[i] = SubglacialPlumes.convert_to_st(plume.grid.Δρ[i], plume.grid.ΔT[i], plume.grid.z[i], plume.grid.Sa[i], plume.grid.Ta[i], params)
-    end
+    #for i = 1:length(grid.n)
+    #    grid.T[i], grid.S[i] = SubglacialPlumes.convert_to_st(plume.grid.Δρ[i], plume.grid.ΔT[i], plume.grid.z[i], plume.grid.Sa[i], plume.grid.Ta[i], params)
+    #end
     
     update_melt_rates!(plume)
     return plume
