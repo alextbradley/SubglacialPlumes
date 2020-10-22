@@ -33,9 +33,9 @@ secs_per_year:: T = 365.25*24*60*60
 Si::T = 0.0       #salinity of ice
 Ti::T = 0.0     #tempatature of ice
 ρ0::T = 1000.0    #reference density of water
-initial_geometry::Array{T,2}  = linear_geometry(0.01, -1000) #default geometry is one with slope o.01 and grounding line depth -1000
-initial_Sa::Array{T,1} = 34.6 * ones(size(initial_geometry)[2],); @assert length(initial_Sa) == size(initial_geometry)[2]#default initial ambient is 34.6 everywhere
-initial_Ta::Array{T,1}  = 0.5  * ones(size(initial_geometry)[2],); @assert length(initial_Ta) == size(initial_geometry)[2]#default initial ambient is 0.5C everywhere
+geometry::Array{T,2}  = linear_geometry(0.01, -1000) #default geometry is one with slope o.01 and grounding line depth -1000
+initial_Sa::Array{T,1} = 34.6 * ones(size(geometry)[2],); @assert length(initial_Sa) == size(geometry)[2]#default initial ambient is 34.6 everywhere
+initial_Ta::Array{T,1}  = 0.5  * ones(size(geometry)[2],); @assert length(initial_Ta) == size(geometry)[2]#default initial ambient is 0.5C everywhere
 end
 
 """
@@ -119,20 +119,20 @@ function start(params)
     #accepts input Z = Z_b(X) in form geometry = [Xb; Zb(Xb)].
     # Xb(1) specifies grounding line position, Zb(1) specifies grounding line position
     grid = Grid(
-        n = size(params.initial_geometry)[2],
-        geometry_length = get_geometry_length(params.initial_geometry),
-        x = params.initial_geometry[1,:],
-        z = params.initial_geometry[2,:],
-        s = get_arclength(params.initial_geometry),
-        dz = get_slope(params.initial_geometry),
+        n = size(params.geometry)[2],
+        geometry_length = get_geometry_length(params.geometry),
+        x = params.geometry[1,:],
+        z = params.geometry[2,:],
+        s = get_arclength(params.geometry),
+        dz = get_slope(params.geometry),
         dρa_dz = get_ambient_density_gradient(params.initial_Sa, params.initial_Ta, params),
         Sa = params.initial_Sa,
         Ta = params.initial_Ta)
 
     store = Store(
-        zgl = params.initial_geometry[2,1],
-        tau = get_tau(params.initial_Ta[1], params.initial_Sa[1], params.initial_geometry[2,1], params),
-        l0  = get_tau(params.initial_Ta[1], params.initial_Sa[1], params.initial_geometry[2,1], params)/params.λ3  #z lengthscale associated with freezing point dependence. Uses slope at first grid point as angle scale
+        zgl = params.geometry[2,1],
+        tau = get_tau(params.initial_Ta[1], params.initial_Sa[1], params.geometry[2,1], params),
+        l0  = get_tau(params.initial_Ta[1], params.initial_Sa[1], params.geometry[2,1], params)/params.λ3  #z lengthscale associated with freezing point dependence. Uses slope at first grid point as angle scale
     )
     plume=State(params, grid, store)
     return plume
@@ -144,7 +144,7 @@ Returns the gradient in ambient density at grid points. Computed using centered 
 function get_ambient_density_gradient(Sa, Ta, params)
     println("Important! You can assumed constant grid in z here (computing ambient density gradient), but this does not hold in general! Need to adapt for non-constant grid spacing or specify input grid of Sa, Ta")
     #compute the associated ambient density using linear equation of state
-    dz = diff(params.initial_geometry[2,:])[1] #we use a regular grid
+    dz = diff(params.geometry[2,:])[1] #we use a regular grid
     ρa = zeros(size(Sa))
     dρa_dz = zeros(size(Sa))
     @. ρa = params.ρ0 * (params.βs * Sa - params.βt * Ta)
