@@ -50,6 +50,7 @@ dz::Array{R,1}; @assert size(dz) == (n,) #slope of geometry (dZb/dx)
 s::Array{R,1}; @assert size(s) == (n,) #arc length parameter at grid points
 Ta::Array{R,1}; @assert size(Ta) == (n,)
 Sa::Array{R,1}; @assert size(Sa) == (n,)
+dρa_dz::Array{R,1}; @assert size(dρa_dz) == (n,)
 U::Array{R,1} = zeros(n,); @assert size(U) == (n,)
 D::Array{R,1} = zeros(n,); @assert size(D) == (n,)
 S::Array{R,1} = zeros(n,); @assert size(S) == (n,)
@@ -124,6 +125,7 @@ function start(params)
         z = params.initial_geometry[2,:],
         s = get_arclength(params.initial_geometry),
         dz = get_slope(params.initial_geometry),
+        dρa_dz = get_ambient_density_gradient(params.initial_Sa, params.initial_Ta, params),
         Sa = params.initial_Sa,
         Ta = params.initial_Ta)
 
@@ -136,7 +138,25 @@ function start(params)
     return plume
 end
 
-#returns the slope Z_b'(X) at grid points X. Computed using centered finite differences, except for the end points which use one-sided differences
+"""
+Returns the gradient in ambient density at grid points. Computed using centered finite differences, except for the endpoint, which use one sided FD.
+"""
+function get_ambient_density_gradient(Sa, Ta, params)
+    println("Important! You can assumed constant grid in z here (computing ambient density gradient), but this does not hold in general! Need to adapt for non-constant grid spacing or specify input grid of Sa, Ta")
+    #compute the associated ambient density using linear equation of state
+    dz = diff(params.initial_geometry[2,:])[1] #we use a regular grid
+    ρa = zeros(size(Sa))
+    dρa_dz = zeros(size(Sa))
+    @. ρa = params.ρ0 * (params.βs * Sa - params.βt * Ta)
+    dρa_dz[2:end-1] = (-ρa[1:end-2] + ρa[3:end])/2/dz
+    dρa_dz[1] = (-3/2 * ρa[1] + 2*ρa[2] -1/2 *ρa[3])/dz
+    dρa_dz[end] = (1/2* ρa[end-2] - 2*ρa[end-1] + 3/2* ρa[end])/dz
+    return dρa_dz
+end
+
+"""
+returns the slope Z_b'(X) at grid points X. Computed using centered finite differences, except for the end points which use one-sided differences
+"""
 function get_slope(geometry)
     dx = diff(geometry[1,:])[1] #we use a regular grid
     slope = zeros(1,size(geometry)[2])
@@ -167,7 +187,8 @@ function get_local_variables(s, grid)
     Z = get_local_var(s, grid.s, grid.z)
     Sa = get_local_var(s, grid.s, grid.Sa)
     Ta = get_local_var(s, grid.s, grid.Ta)
-    return α, Z, Sa, Ta
+    dρa_dz = get_local_var(s, grid.s, grid.dρa_dz)
+    return α, Z, Sa, Ta, dρa_dz
 end
 
 """
@@ -215,13 +236,14 @@ function get_rhs(du, v, plume, s)
     @unpack params, grid = plume
 
     #recover salinity and temperature
-    #M0 = ..
-    α, Z, Sa, Ta = get_local_variables(s, grid)
+    #M0 = .. 
+    α, Z, Sa, Ta, dρa_dz = get_local_variables(s, grid)
     M0 = m_naught(params) #approximation using L/c >> Tf - Tfi
 
     du[1] = params.E0*U*α + M0*U*ΔT
     du[2] = params.g*D*Δρ*α/params.ρ0 - params.Cd*U^2
-    du[3] = M0*U*ΔT*density_contrast_effective(Sa, Ta, Z,params) #+ effective density contrast gradient term
+    du[3] = (M0*U*ΔT*density_contrast_effective(Sa, Ta, Z,params)  + 
+            α * dρa_dz * D * U); 
     du[4] = ((Ta - temp_af(Sa, Z, params))*params.E0*α*U +
             (temp_ief(Z, params) - temp_freezing(params.Si, Z, params))*M0*U*ΔT -
             params.λ3*α*D*U)
