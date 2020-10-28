@@ -162,8 +162,11 @@ function get_slope(geometry)
     slope = zeros(1,size(geometry)[2])
     slope[2:end-1] = (-geometry[2,1:end-2] + geometry[2,3:end])/2 /dx
 
+    #one sided for all grid points before final
+    slope[1:end-1] = (geometry[2,2:end] - geometry[2,1:end-1])/ dx
+
     #one sided fd for slope at both ends using 23 point stencil
-    slope[1] = (-3/2 * geometry[2,1] + 2*geometry[2,2] -1/2 *geometry[2,3])/dx
+    #slope[1] = (-3/2 * geometry[2,1] + 2*geometry[2,2] -1/2 *geometry[2,3])/dx
     slope[end] =(1/2* geometry[2,end-2] - 2*geometry[2,end-1] + 3/2* geometry[2,end])/dx
     return slope[1,:]
 end
@@ -279,7 +282,7 @@ end
     Update the initial conditions stored in grid. 
     Overload this method to use initial conditions other than zero flux initial conditions.
 """
-function update_ic!(plume::AbstractModel; xc = 100) 
+function update_ic!(plume::AbstractModel; xc = 10) 
     @unpack params, grid, store = plume
     αlocal = grid.dz[1]
     E  = params.E0 * αlocal
@@ -299,9 +302,9 @@ function update_ic!(plume::AbstractModel; xc = 100)
 end
 
 """
-    Solve the plume equations. Variables stored on grid are modified.
+    Solve the plume equations. Variables stored on grid are modified. solution span set span sspan: sovles on the whole s domain if there are no points at which dz goes negative, else solves until the first point where dz goes negative. 
 """
-function solve!(plume; sspan = (0,plume.grid.geometry_length))
+function solve!(plume; sspan = (0, (any(plume.grid.dz .< 1e-5) ? plume.grid.s[findfirst(plume.grid.dz .< 1e-5)] : plume.grid.s[end])))
     @unpack params, grid, store = plume
 
     #endow plume with an initial condition (overload to change from no-discharge ic)
